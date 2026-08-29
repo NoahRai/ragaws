@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     max_upload_bytes: int = 10 * 1024 * 1024
     embedding_dimensions: int = 256
+    storage_backend: str = "local"
+    s3_bucket: str | None = None
+    aws_region: str = "us-east-1"
+    presigned_url_expiry_seconds: int = 300
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="CLOUDMIND_")
 

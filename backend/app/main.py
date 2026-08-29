@@ -12,7 +12,7 @@ from .config import settings
 from .database import Base, engine, get_db
 from .models import Document, DocumentChunk, User
 from .schemas import AskResponse, Credentials, DocumentOut, SearchRequest, SearchResponse, Source, Token
-from .services.documents import DocumentProcessor, LocalStorageService
+from .services.documents import DocumentProcessor, LocalStorageService, S3StorageService, document_object_key
 from .services.retrieval import EmbeddingService, LLMService, RetrievalService
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="CloudMind API", version="0.1.0")
 security = HTTPBearer()
 password_hash = PasswordHash.recommended()
-processor, storage = DocumentProcessor(), LocalStorageService()
+processor = DocumentProcessor()
+storage = S3StorageService(settings.s3_bucket or "", settings.aws_region) if settings.storage_backend == "s3" else LocalStorageService()
 embeddings = EmbeddingService(); retrieval = RetrievalService(embeddings); llm = LLMService()
 
 @app.on_event("startup")
@@ -53,12 +54,13 @@ def login(body: Credentials, db: Session = Depends(get_db)):
     if not user or not password_hash.verify(body.password, user.password_hash): raise HTTPException(401, "Incorrect email or password")
     return token_for(user)
 
-def process_document(document_id: str, user_id: str, filename: str, data: bytes):
+def process_document(document_id: str, user_id: str, filename: str):
     # In production this function is executed by a separate SQS worker.
     from .database import SessionLocal
     db = SessionLocal()
     try:
         doc = db.get(Document, document_id); doc.status = "processing"; db.commit()
+        data = storage.get(document_object_key(user_id, document_id, filename))
         chunks = processor.chunk(processor.extract_text(filename, data)); vectors = embeddings.embed_many(chunks)
         db.add_all([DocumentChunk(document_id=document_id, user_id=user_id, chunk_index=i, text=text, embedding_json=json.dumps(vector)) for i, (text, vector) in enumerate(zip(chunks, vectors))])
         doc.status = "ready"; db.commit()
@@ -74,8 +76,8 @@ async def upload_document(file: UploadFile = File(...), user: User = Depends(cur
     data = await file.read()
     if not data or len(data) > settings.max_upload_bytes: raise HTTPException(413, "File is empty or exceeds the upload limit")
     doc = Document(user_id=user.id, filename=file.filename, content_type=file.content_type or "application/octet-stream", size_bytes=len(data)); db.add(doc); db.commit(); db.refresh(doc)
-    storage.put(f"documents/{user.id}/{doc.id}/original", data)
-    process_document(doc.id, user.id, doc.filename, data)
+    storage.put(document_object_key(user.id, doc.id, doc.filename), data, doc.content_type)
+    process_document(doc.id, user.id, doc.filename)
     db.refresh(doc); return doc
 
 @app.get("/documents", response_model=list[DocumentOut])
@@ -92,7 +94,14 @@ def document(document_id: str, user: User = Depends(current_user), db: Session =
 def delete_document(document_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     doc = db.scalar(select(Document).where(Document.id == document_id, Document.user_id == user.id))
     if not doc: raise HTTPException(404, "Document not found")
-    storage.delete(f"documents/{user.id}/{doc.id}/original"); db.delete(doc); db.commit()
+    storage.delete(document_object_key(user.id, doc.id, doc.filename)); db.delete(doc); db.commit()
+
+@app.get("/documents/{document_id}/download-url")
+def document_download_url(document_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    doc = db.scalar(select(Document).where(Document.id == document_id, Document.user_id == user.id))
+    if not doc: raise HTTPException(404, "Document not found")
+    if settings.storage_backend != "s3": raise HTTPException(501, "Download URLs are available with S3 storage")
+    return {"url": storage.download_url(document_object_key(user.id, doc.id, doc.filename), settings.presigned_url_expiry_seconds)}
 
 def as_source(result) -> Source:
     score, chunk, filename = result
