@@ -1,0 +1,9 @@
+region             = "us-east-1"
+vpc_id             = "vpc-0123456789abcdef0"
+public_subnet_ids  = ["subnet-public-a", "subnet-public-b"]
+private_subnet_ids = ["subnet-private-a", "subnet-private-b"]
+api_image          = "ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/cloudmind-api:SHA"
+worker_image       = "ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/cloudmind-worker:SHA"
+database_url_secret_arn = "arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:cloudmind/database-url"
+jwt_secret_arn         = "arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:cloudmind/jwt-secret"
+# Supply db_password through TF_VAR_db_password; never put it in this file.
