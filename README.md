@@ -1,0 +1,69 @@
+# CloudMind
+
+CloudMind is a private AI document intelligence platform: users upload TXT/PDF files, CloudMind processes them, retrieves relevant passages with vector similarity, and returns grounded answers with sources.
+
+> **Status:** a polished local MVP (Phases 1–2) with production-oriented seams for AWS (Phases 3–6). The app runs end-to-end today; the Terraform starter intentionally provisions only the first cloud primitives rather than implying untested production deployment.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  U[User] --> R[React / Vite]
+  R --> A[FastAPI API]
+  A --> D[(PostgreSQL + pgvector)]
+  A --> S[S3 private documents]
+  A --> Q[SQS processing queue]
+  Q --> W[Worker: parse, chunk, PyTorch embeddings]
+  W --> D
+  A --> L[LLM]
+  A --> C[CloudWatch]
+```
+
+The local implementation uses SQLite and local in-memory storage. `DocumentProcessor`, `StorageService`, `EmbeddingService`, `RetrievalService`, and `LLMService` isolate the cloud/provider-specific work. Production replaces `LocalStorageService` with S3, dispatches `process_document` through SQS to a separate worker, uses RDS PostgreSQL/pgvector, and substitutes the lightweight PyTorch hashing embedder with a sentence-transformer model.
+
+## Run locally
+
+```bash
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+# Separate terminal
+cd frontend && npm install && npm run dev
+```
+
+Open the UI at `http://localhost:5173`; API documentation is at `http://localhost:8000/docs`.
+
+Or run `docker compose up --build`.
+
+## Verification
+
+```bash
+PYTHONPATH=backend pytest backend/tests
+```
+
+## Data flow and security
+
+1. Authenticated user uploads a validated PDF/TXT document.
+2. A document record is created; it is parsed, chunked, embedded under `torch.inference_mode()`, and marked `ready` (synchronously for the local MVP).
+3. Every list, retrieval, search, and delete query filters by the JWT subject, preventing cross-user access.
+4. Search embeds the question, scores only that user's ready chunks, and returns document/chunk citations.
+
+Passwords are Argon2-hashed, SQLAlchemy binds query values, secrets live in environment variables, and file size/type are validated. Copy `.env.example` to `.env` and replace the JWT secret before deployment.
+
+## Production roadmap
+
+- **AWS storage/queue:** private S3 keys use `documents/{user_id}/{document_id}/original`; SQS plus DLQ makes processing retryable and idempotent.
+- **Database:** migrate SQLite to PostgreSQL with Alembic; store embeddings in `vector`, add HNSW indexes, and use an ownership-scoped join for retrieval.
+- **Compute/observability:** split API/worker Docker images on ECS Fargate; emit JSON correlation IDs, latency, failures, and processing duration to CloudWatch.
+- **RAG quality:** use a sentence-transformer, pgvector cosine search, a provider-backed LLM with a strict context-only prompt, and optional reranking/hybrid BM25.
+
+## Project layout
+
+```
+frontend/       React + TypeScript Vite interface
+backend/app/    FastAPI, models, services, authentication
+backend/tests/  API workflow test
+infrastructure/ Terraform cloud starter
+.github/        CI pipeline
+```
