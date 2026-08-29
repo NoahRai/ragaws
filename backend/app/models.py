@@ -38,3 +38,15 @@ class DocumentChunk(Base):
     text: Mapped[str] = mapped_column(Text)
     embedding_json: Mapped[str] = mapped_column(Text)
     document: Mapped[Document] = relationship(back_populates="chunks")
+
+
+class ProcessingJob(Base):
+    __tablename__ = "processing_jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), unique=True, index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

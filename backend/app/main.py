@@ -10,9 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from .config import settings
 from .database import Base, engine, get_db
-from .models import Document, DocumentChunk, User
-from .schemas import AskResponse, Credentials, DocumentOut, SearchRequest, SearchResponse, Source, Token
-from .services.documents import DocumentProcessor, LocalStorageService, S3StorageService, document_object_key
+from .models import Document, DocumentChunk, ProcessingJob, User
+from .schemas import AskResponse, Credentials, DocumentOut, JobOut, SearchRequest, SearchResponse, Source, Token
+from .services.documents import DocumentProcessor, build_storage, document_object_key
+from .services.jobs import LocalJobQueue, SQSJobQueue
+from .processing import process_job
 from .services.retrieval import EmbeddingService, LLMService, RetrievalService
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -21,8 +23,10 @@ app = FastAPI(title="CloudMind API", version="0.1.0")
 security = HTTPBearer()
 password_hash = PasswordHash.recommended()
 processor = DocumentProcessor()
-storage = S3StorageService(settings.s3_bucket or "", settings.aws_region) if settings.storage_backend == "s3" else LocalStorageService()
+storage = build_storage(settings.storage_backend, settings.s3_bucket, settings.aws_region)
 embeddings = EmbeddingService(); retrieval = RetrievalService(embeddings); llm = LLMService()
+def run_local_job(job_id: str) -> None: process_job(job_id, storage, processor, embeddings)
+queue = SQSJobQueue(settings.sqs_queue_url or "", settings.aws_region) if settings.queue_backend == "sqs" else LocalJobQueue(run_local_job)
 
 @app.on_event("startup")
 def startup(): Base.metadata.create_all(engine)
@@ -54,22 +58,6 @@ def login(body: Credentials, db: Session = Depends(get_db)):
     if not user or not password_hash.verify(body.password, user.password_hash): raise HTTPException(401, "Incorrect email or password")
     return token_for(user)
 
-def process_document(document_id: str, user_id: str, filename: str):
-    # In production this function is executed by a separate SQS worker.
-    from .database import SessionLocal
-    db = SessionLocal()
-    try:
-        doc = db.get(Document, document_id); doc.status = "processing"; db.commit()
-        data = storage.get(document_object_key(user_id, document_id, filename))
-        chunks = processor.chunk(processor.extract_text(filename, data)); vectors = embeddings.embed_many(chunks)
-        db.add_all([DocumentChunk(document_id=document_id, user_id=user_id, chunk_index=i, text=text, embedding_json=json.dumps(vector)) for i, (text, vector) in enumerate(zip(chunks, vectors))])
-        doc.status = "ready"; db.commit()
-    except Exception as exc:
-        doc = db.get(Document, document_id)
-        if doc: doc.status = "failed"; doc.error_message = str(exc)[:500]; db.commit()
-        logger.exception("document_processing_failed", extra={"document_id": document_id})
-    finally: db.close()
-
 @app.post("/documents/upload", response_model=DocumentOut, status_code=202)
 async def upload_document(file: UploadFile = File(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
     if not file.filename or not file.filename.lower().endswith((".txt", ".pdf")): raise HTTPException(415, "Only PDF and TXT files are supported")
@@ -77,7 +65,8 @@ async def upload_document(file: UploadFile = File(...), user: User = Depends(cur
     if not data or len(data) > settings.max_upload_bytes: raise HTTPException(413, "File is empty or exceeds the upload limit")
     doc = Document(user_id=user.id, filename=file.filename, content_type=file.content_type or "application/octet-stream", size_bytes=len(data)); db.add(doc); db.commit(); db.refresh(doc)
     storage.put(document_object_key(user.id, doc.id, doc.filename), data, doc.content_type)
-    process_document(doc.id, user.id, doc.filename)
+    job = ProcessingJob(document_id=doc.id, user_id=user.id); db.add(job); db.commit(); db.refresh(job)
+    queue.enqueue(job.id)
     db.refresh(doc); return doc
 
 @app.get("/documents", response_model=list[DocumentOut])
@@ -89,6 +78,12 @@ def document(document_id: str, user: User = Depends(current_user), db: Session =
     doc = db.scalar(select(Document).where(Document.id == document_id, Document.user_id == user.id))
     if not doc: raise HTTPException(404, "Document not found")
     return doc
+
+@app.get("/jobs/{job_id}", response_model=JobOut)
+def job_status(job_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    job = db.scalar(select(ProcessingJob).where(ProcessingJob.id == job_id, ProcessingJob.user_id == user.id))
+    if not job: raise HTTPException(404, "Job not found")
+    return job
 
 @app.delete("/documents/{document_id}", status_code=204)
 def delete_document(document_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):

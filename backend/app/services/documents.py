@@ -74,3 +74,7 @@ def document_object_key(user_id: str, document_id: str, filename: str) -> str:
     """A stable, private object layout. IDs prevent filename path traversal/collision."""
     suffix = filename.rsplit(".", 1)[-1].lower()
     return f"documents/{user_id}/{document_id}/original.{suffix}"
+
+
+def build_storage(backend: str, bucket: str | None, region: str) -> StorageService:
+    return S3StorageService(bucket or "", region) if backend == "s3" else LocalStorageService()

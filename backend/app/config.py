@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     s3_bucket: str | None = None
     aws_region: str = "us-east-1"
     presigned_url_expiry_seconds: int = 300
+    queue_backend: str = "local"
+    sqs_queue_url: str | None = None
+    worker_wait_seconds: int = 20
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="CLOUDMIND_")
 

@@ -26,3 +26,8 @@ class SearchResponse(BaseModel):
 
 class AskResponse(SearchResponse):
     answer: str
+
+class JobOut(BaseModel):
+    id: str; document_id: str; status: str; attempts: int; error_message: str | None
+    created_at: datetime; completed_at: datetime | None
+    model_config = ConfigDict(from_attributes=True)

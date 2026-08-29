@@ -2,7 +2,7 @@
 
 CloudMind is a private AI document intelligence platform: users upload TXT/PDF files, CloudMind processes them, retrieves relevant passages with vector similarity, and returns grounded answers with sources.
 
-> **Status:** Phases 1–3 complete: the local MVP now has an S3-backed storage implementation ready for deployment. Queue workers, RDS/pgvector, ECS, and monitoring remain later phases.
+> **Status:** Phases 1–4 complete: documents now enter a persisted processing-job workflow. Local development processes them inline; AWS mode dispatches SQS messages to a separate worker with DLQ retry protection.
 
 ## Architecture
 
@@ -19,7 +19,7 @@ flowchart LR
   A --> C[CloudWatch]
 ```
 
-The local implementation uses SQLite and local in-memory storage. Set `CLOUDMIND_STORAGE_BACKEND=s3` and `CLOUDMIND_S3_BUCKET` to use `S3StorageService`; it stores private, encrypted objects as `documents/{user_id}/{document_id}/original.{extension}` and creates short-lived presigned download URLs only after ownership validation. `DocumentProcessor`, `StorageService`, `EmbeddingService`, `RetrievalService`, and `LLMService` isolate provider-specific work.
+The local implementation uses SQLite and local in-memory storage. Set `CLOUDMIND_STORAGE_BACKEND=s3` and `CLOUDMIND_S3_BUCKET` to use `S3StorageService`; it stores private, encrypted objects as `documents/{user_id}/{document_id}/original.{extension}` and creates short-lived presigned download URLs only after ownership validation. Set `CLOUDMIND_QUEUE_BACKEND=sqs` and `CLOUDMIND_SQS_QUEUE_URL` to dispatch an idempotent `processing_jobs` record to `backend/worker.py`. `DocumentProcessor`, `StorageService`, `EmbeddingService`, `RetrievalService`, and `LLMService` isolate provider-specific work.
 
 ## Run locally
 
@@ -53,7 +53,6 @@ Passwords are Argon2-hashed, SQLAlchemy binds query values, secrets live in envi
 
 ## Production roadmap
 
-- **Async queue:** dispatch processing via SQS plus a DLQ to make processing retryable and idempotent.
 - **Database:** migrate SQLite to PostgreSQL with Alembic; store embeddings in `vector`, add HNSW indexes, and use an ownership-scoped join for retrieval.
 - **Compute/observability:** split API/worker Docker images on ECS Fargate; emit JSON correlation IDs, latency, failures, and processing duration to CloudWatch.
 - **RAG quality:** use a sentence-transformer, pgvector cosine search, a provider-backed LLM with a strict context-only prompt, and optional reranking/hybrid BM25.

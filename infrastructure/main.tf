@@ -17,6 +17,10 @@ resource "aws_s3_bucket_versioning" "documents" {
   bucket = aws_s3_bucket.documents.id
   versioning_configuration { status = "Enabled" }
 }
-resource "aws_sqs_queue" "processing" { name = "cloudmind-processing" visibility_timeout_seconds = 300 }
 resource "aws_sqs_queue" "dlq" { name = "cloudmind-processing-dlq" }
+resource "aws_sqs_queue" "processing" {
+  name = "cloudmind-processing"
+  visibility_timeout_seconds = 300
+  redrive_policy = jsonencode({ deadLetterTargetArn = aws_sqs_queue.dlq.arn, maxReceiveCount = 3 })
+}
 output "document_bucket" { value = aws_s3_bucket.documents.id }
