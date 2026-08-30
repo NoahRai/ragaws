@@ -18,3 +18,10 @@ def test_upload_search_and_isolation():
     assert client.get("/documents", headers=second).json() == []
     result = client.post("/search", headers=first, json={"query": "What is L1?"})
     assert result.status_code == 200 and result.json()["sources"][0]["document_name"] == "notes.txt"
+
+def test_operational_endpoints_include_request_trace_and_metrics():
+    health = client.get("/health", headers={"X-Request-ID": "trace-123"})
+    assert health.headers["X-Request-ID"] == "trace-123"
+    metrics = client.get("/metrics")
+    assert metrics.status_code == 200
+    assert "cloudmind_api_requests_total" in metrics.text

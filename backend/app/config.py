@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     queue_backend: str = "local"
     sqs_queue_url: str | None = None
     worker_wait_seconds: int = 20
+    cors_origins: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="CLOUDMIND_")
 

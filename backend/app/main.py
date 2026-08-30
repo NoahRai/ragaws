@@ -1,9 +1,12 @@
 import json
 import logging
+import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 import jwt
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pwdlib import PasswordHash
 from sqlalchemy import select
@@ -16,10 +19,16 @@ from .services.documents import DocumentProcessor, build_storage, document_objec
 from .services.jobs import LocalJobQueue, SQSJobQueue
 from .processing import process_job
 from .services.retrieval import EmbeddingService, LLMService, RetrievalService
+from .observability import configure_logging, metrics
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
-logger = logging.getLogger(__name__)
-app = FastAPI(title="CloudMind API", version="0.1.0")
+logger = configure_logging()
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    Base.metadata.create_all(engine)
+    yield
+
+app = FastAPI(title="CloudMind API", version="0.1.0", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=[origin.strip() for origin in settings.cors_origins.split(",")], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 security = HTTPBearer()
 password_hash = PasswordHash.recommended()
 processor = DocumentProcessor()
@@ -28,8 +37,22 @@ embeddings = EmbeddingService(); retrieval = RetrievalService(embeddings); llm =
 def run_local_job(job_id: str) -> None: process_job(job_id, storage, processor, embeddings)
 queue = SQSJobQueue(settings.sqs_queue_url or "", settings.aws_region) if settings.queue_backend == "sqs" else LocalJobQueue(run_local_job)
 
-@app.on_event("startup")
-def startup(): Base.metadata.create_all(engine)
+@app.middleware("http")
+async def observe_request(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", str(uuid4()))
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (time.perf_counter() - started) * 1000
+        metrics.increment("api_requests_failed"); metrics.observe_ms("api_request_duration", duration_ms)
+        logger.exception("api_request_failed", extra={"request_id": request_id, "method": request.method, "path": request.url.path, "duration_ms": round(duration_ms, 2)})
+        raise
+    duration_ms = (time.perf_counter() - started) * 1000
+    metrics.increment("api_requests"); metrics.increment(f"api_status_{response.status_code}"); metrics.observe_ms("api_request_duration", duration_ms)
+    response.headers["X-Request-ID"] = request_id
+    logger.info("api_request", extra={"request_id": request_id, "method": request.method, "path": request.url.path, "status_code": response.status_code, "duration_ms": round(duration_ms, 2)})
+    return response
 
 def current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)) -> User:
     try: payload = jwt.decode(credentials.credentials, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
@@ -44,6 +67,10 @@ def token_for(user: User) -> Token:
 
 @app.get("/health")
 def health(): return {"status": "ok"}
+
+@app.get("/metrics", include_in_schema=False)
+def metric_snapshot():
+    return Response(metrics.prometheus(), media_type="text/plain; version=0.0.4")
 
 @app.post("/auth/register", response_model=Token, status_code=201)
 def register(body: Credentials, db: Session = Depends(get_db)):
@@ -67,6 +94,7 @@ async def upload_document(file: UploadFile = File(...), user: User = Depends(cur
     storage.put(document_object_key(user.id, doc.id, doc.filename), data, doc.content_type)
     job = ProcessingJob(document_id=doc.id, user_id=user.id); db.add(job); db.commit(); db.refresh(job)
     queue.enqueue(job.id)
+    metrics.increment("documents_uploaded")
     db.refresh(doc); return doc
 
 @app.get("/documents", response_model=list[DocumentOut])
@@ -109,4 +137,5 @@ def search(body: SearchRequest, user: User = Depends(current_user), db: Session 
 @app.post("/ask", response_model=AskResponse)
 def ask(body: SearchRequest, user: User = Depends(current_user), db: Session = Depends(get_db)):
     sources = [as_source(row) for row in retrieval.search(db, user.id, body.query, body.top_k)]
+    metrics.increment("questions_asked")
     return AskResponse(answer=llm.answer(body.query, [source.model_dump() for source in sources]), sources=sources)

@@ -2,7 +2,7 @@
 
 CloudMind is a private AI document intelligence platform: users upload TXT/PDF files, CloudMind processes them, retrieves relevant passages with vector similarity, and returns grounded answers with sources.
 
-> **Status:** Phases 1–5 complete: CloudMind has a parameterized AWS deployment topology for independently scalable API and worker services. It is ready to be reviewed and applied in an AWS account; infrastructure has not been applied from this repository.
+> **Status:** Phases 1–6 complete: CloudMind includes deployment infrastructure plus request-correlated JSON logs, operational metrics, container health checks, and CI build verification. AWS infrastructure has not been applied from this repository.
 
 ## Architecture
 
@@ -77,3 +77,9 @@ Terraform provisions private S3/SQS resources, ECR repositories, an RDS PostgreS
 4. Run `terraform init`, `terraform plan`, and then review `terraform apply` in `infrastructure/`.
 
 The RDS database is private and deletion-protected; the task roles are scoped separately so the API can send queue messages while the worker can receive them. No AWS keys are present in this repository.
+
+## Operations (Phase 6)
+
+Every API response includes `X-Request-ID`; pass your own value to trace a request through JSON API logs and worker logs in CloudWatch. `/metrics` provides a Prometheus-compatible plaintext snapshot including request totals/latency, processed documents, failures, and questions asked. ECS collects the containers' standard output in the configured CloudWatch log groups.
+
+The API and worker containers run as non-root users. CI runs the backend test suite, builds both containers, and builds the frontend before pull requests can merge.
