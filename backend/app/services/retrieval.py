@@ -34,12 +34,40 @@ class EmbeddingService:
 class RetrievalService:
     def __init__(self, embeddings: EmbeddingService): self.embeddings = embeddings
 
+    _QUERY_EXPANSIONS = {
+        "school": {"education", "university", "college"},
+        "intern": {"internship", "experience", "employer", "company"},
+        "work": {"experience", "employer", "company", "role"},
+    }
+
+    @classmethod
+    def _terms(cls, text: str) -> set[str]:
+        terms = set(re.findall(r"[a-zA-Z]{3,}", text.lower()))
+        for term in tuple(terms):
+            if term.endswith("ed"):
+                terms.add(term[:-2])
+            if term.endswith("ing"):
+                terms.add(term[:-3])
+        return terms
+
+    @classmethod
+    def query_terms(cls, query: str) -> set[str]:
+        terms = cls._terms(query)
+        for term in tuple(terms):
+            terms.update(cls._QUERY_EXPANSIONS.get(term, set()))
+        return terms
+
     def search(self, db: Session, user_id: str, query: str, top_k: int):
         query_vector = torch.tensor(self.embeddings.embed(query))
+        query_terms = self.query_terms(query)
         rows = db.execute(select(DocumentChunk, Document.filename).join(Document).where(DocumentChunk.user_id == user_id, Document.status == "ready")).all()
         scored = []
         for chunk, filename in rows:
-            score = float(torch.dot(query_vector, torch.tensor(json.loads(chunk.embedding_json))))
+            vector_score = max(0.0, float(torch.dot(query_vector, torch.tensor(json.loads(chunk.embedding_json)))))
+            chunk_terms = self._terms(chunk.text)
+            lexical_score = len(query_terms & chunk_terms) / max(1, len(query_terms))
+            # The lexical channel preserves exact résumé entities; the vector channel adds recall.
+            score = 0.55 * vector_score + 0.45 * lexical_score
             scored.append((score, chunk, filename))
         return sorted(scored, key=lambda item: item[0], reverse=True)[:top_k]
 
@@ -48,6 +76,7 @@ class LLMService:
     """Grounded local answer extractor. Production can replace this with an LLM provider."""
     _STOP_WORDS = {"a", "an", "at", "did", "do", "does", "for", "he", "her", "his", "i", "in", "is", "of", "she", "the", "they", "to", "was", "what", "where", "who", "with", "you", "your"}
     _MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+    _QUERY_EXPANSIONS = RetrievalService._QUERY_EXPANSIONS
 
     @classmethod
     def _terms(cls, text: str) -> set[str]:
@@ -60,6 +89,12 @@ class LLMService:
                 terms.add(token[:-2])
             if token.endswith("ing"):
                 terms.add(token[:-3])
+        return terms
+
+    def _query_terms(self, text: str) -> set[str]:
+        terms = self._terms(text)
+        for term in tuple(terms):
+            terms.update(self._QUERY_EXPANSIONS.get(term, set()))
         return terms
 
     @staticmethod
@@ -82,10 +117,29 @@ class LLMService:
         location_text = f" ({location})" if location else ""
         return f"They interned at {company}{location_text}."
 
+    @staticmethod
+    def _schools(context: str) -> list[str]:
+        institutions = []
+        patterns = [
+            r"\bUniversity of [A-Z][A-Za-z ,]+?(?=\s+(?:Expected|Bachelor|Master|Associate)|[•\n]|$)",
+            r"\b[A-Z][A-Za-z ]+ College\b",
+        ]
+        for pattern in patterns:
+            for match in re.finditer(pattern, context):
+                school = re.sub(r"\s+", " ", match.group(0)).strip(" ,")
+                if school and school not in institutions:
+                    institutions.append(school)
+        return institutions
+
     def answer(self, question: str, sources: list[dict]) -> str:
         if not sources or sources[0]["score"] <= 0:
             return "I couldn't find enough information in your uploaded documents to answer that."
-        query_terms = self._terms(question)
+        query_terms = self._query_terms(question)
+        context = " ".join(source["text"] for source in sources)
+        if {"school", "education", "university", "college"} & query_terms:
+            schools = self._schools(context)
+            if schools:
+                return f"According to the uploaded documents, they attended {' and '.join(schools)}."
         candidates = self._statements(sources)
         ranked = sorted(candidates, key=lambda statement: len(query_terms & self._terms(statement)), reverse=True)
         if not ranked or not (query_terms & self._terms(ranked[0])):
