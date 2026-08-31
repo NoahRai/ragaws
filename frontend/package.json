@@ -1,1 +1,1 @@
-{"scripts":{"dev":"vite","build":"tsc -b && vite build"},"dependencies":{"vite":"latest","typescript":"latest","react":"latest","react-dom":"latest"},"devDependencies":{"@types/react":"latest","@types/react-dom":"latest"}}
+{"scripts":{"dev":"vite","build":"tsc -b && vite build"},"dependencies":{"animejs":"^4.5.0","motion":"^13.1.1","react":"latest","react-dom":"latest","typescript":"latest","vite":"latest"},"devDependencies":{"@types/react":"latest","@types/react-dom":"latest"}}

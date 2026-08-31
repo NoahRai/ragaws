@@ -1,4 +1,6 @@
 import { ChangeEvent, useEffect, useState } from 'react';
+import { animate, stagger } from 'animejs';
+import { AnimatePresence, motion } from 'motion/react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
 
@@ -6,64 +8,38 @@ const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 type Document = { id: string; filename: string; size_bytes: number; status: string; created_at: string };
 type Source = { document_name: string; text: string; score: number };
 
+function SourceSignal({ sources }: { sources: Source[] }) {
+  const values = sources.length ? sources.slice(0, 5).map((source) => Math.max(10, Math.round(source.score * 100))) : [42, 62, 38, 78, 54];
+  return <div className="signal-card reveal"><div className="signal-header"><div><span className="eyebrow">RETRIEVAL SIGNAL</span><h3>Source confidence</h3></div><span className="live-dot">LIVE</span></div><div className="signal-bars" aria-label="Retrieved source relevance visualization">{values.map((value, index) => <motion.div key={`${value}-${index}`} className="signal-column" initial={{ scaleY: 0 }} animate={{ scaleY: 1 }} transition={{ delay: index * .08, type: 'spring', stiffness: 130, damping: 16 }}><div className="signal-bar" style={{ height: `${value}%` }} /><span>{index + 1}</span></motion.div>)}</div><p>Each pulse is a ranked source chunk returned by semantic search.</p></div>;
+}
+
 function App() {
   const [token, setToken] = useState(localStorage.token || '');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [question, setQuestion] = useState('');
-  const [answer, setAnswer] = useState('');
-  const [sources, setSources] = useState<Source[]>([]);
-  const [notice, setNotice] = useState('');
+  const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
+  const [documents, setDocuments] = useState<Document[]>([]); const [question, setQuestion] = useState('');
+  const [answer, setAnswer] = useState(''); const [sources, setSources] = useState<Source[]>([]);
+  const [notice, setNotice] = useState(''); const [isAsking, setIsAsking] = useState(false);
   const headers = () => ({ Authorization: `Bearer ${token}` });
 
-  async function loadDocuments() {
-    try {
-      const response = await fetch(`${API}/documents`, { headers: headers() });
-      if (!response.ok) throw new Error();
-      setDocuments(await response.json());
-    } catch { setNotice('Could not load documents. Check that the API is running.'); }
-  }
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    animate('.reveal', { opacity: [0, 1], translateY: [18, 0], delay: stagger(70), duration: 700, ease: 'outExpo' });
+  }, [token]);
 
+  async function loadDocuments() { try { const response = await fetch(`${API}/documents`, { headers: headers() }); if (!response.ok) throw new Error(); setDocuments(await response.json()); } catch { setNotice('Could not load documents. Check that the API is running.'); } }
   useEffect(() => { if (token) void loadDocuments(); }, [token]);
 
   async function authenticate(path: 'login' | 'register') {
     setNotice('');
-    try {
-      const response = await fetch(`${API}/auth/${path}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }),
-      });
-      if (!response.ok) { setNotice(path === 'login' ? 'Incorrect email or password.' : 'This email is already registered.'); return; }
-      const data = await response.json(); localStorage.token = data.access_token; setToken(data.access_token);
-    } catch { setNotice('Could not reach CloudMind. Check that the API is running.'); }
+    try { const response = await fetch(`${API}/auth/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) }); if (!response.ok) { setNotice(path === 'login' ? 'Incorrect email or password.' : 'This email is already registered.'); return; } const data = await response.json(); localStorage.token = data.access_token; setToken(data.access_token); } catch { setNotice('Could not reach CloudMind. Check that the API is running.'); }
   }
+  async function upload(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; setNotice('Uploading and processing your document…'); const body = new FormData(); body.append('file', file); const response = await fetch(`${API}/documents/upload`, { method: 'POST', headers: headers(), body }); if (!response.ok) { setNotice('Upload failed. Please use a PDF or TXT within the size limit.'); return; } setNotice('Document is ready to search.'); await loadDocuments(); }
+  async function removeDocument(id: string) { const response = await fetch(`${API}/documents/${id}`, { method: 'DELETE', headers: headers() }); if (!response.ok) { setNotice('Document deletion failed.'); return; } setDocuments(documents.filter((document) => document.id !== id)); setNotice('Document deleted.'); }
+  async function ask() { if (!question.trim()) return; setIsAsking(true); setNotice(''); try { const response = await fetch(`${API}/ask`, { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify({ query: question }) }); if (!response.ok) throw new Error(); const data = await response.json(); setAnswer(data.answer); setSources(data.sources); } catch { setNotice('CloudMind could not answer that question.'); } finally { setIsAsking(false); } }
 
-  async function upload(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]; if (!file) return;
-    setNotice('Uploading and processing your document…');
-    const body = new FormData(); body.append('file', file);
-    const response = await fetch(`${API}/documents/upload`, { method: 'POST', headers: headers(), body });
-    if (!response.ok) { setNotice('Upload failed. Please use a PDF or TXT within the size limit.'); return; }
-    setNotice('Document is ready to search.'); await loadDocuments();
-  }
+  if (!token) return <main className="auth-shell"><motion.section className="auth-card" initial={{ opacity: 0, y: 22, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ type: 'spring', stiffness: 120, damping: 18 }}><div className="orbit orbit-one" /><div className="orbit orbit-two" /><span className="eyebrow">PRIVATE RAG WORKSPACE</span><h1><span>☁</span> CloudMind</h1><p>Turn your documents into answers you can trust.</p><label>Email<input placeholder="you@example.com" type="email" onChange={(event) => setEmail(event.target.value)} /></label><label>Password<input placeholder="8+ characters" type="password" onChange={(event) => setPassword(event.target.value)} /></label><AnimatePresence>{notice && <motion.p className="notice error" role="alert" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>{notice}</motion.p>}</AnimatePresence><button className="primary" onClick={() => authenticate('login')}>Enter your workspace <span>→</span></button><button className="link-button" onClick={() => authenticate('register')}>Create a free account</button></motion.section></main>;
 
-  async function removeDocument(id: string) {
-    const response = await fetch(`${API}/documents/${id}`, { method: 'DELETE', headers: headers() });
-    if (!response.ok) { setNotice('Document deletion failed.'); return; }
-    setDocuments(documents.filter((document) => document.id !== id)); setNotice('Document deleted.');
-  }
-
-  async function ask() {
-    if (!question.trim()) return;
-    setNotice('');
-    const response = await fetch(`${API}/ask`, { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify({ query: question }) });
-    if (!response.ok) { setNotice('CloudMind could not answer that question.'); return; }
-    const data = await response.json(); setAnswer(data.answer); setSources(data.sources);
-  }
-
-  if (!token) return <main className="auth-shell"><section className="auth-card"><span className="eyebrow">PRIVATE RAG WORKSPACE</span><h1>☁ CloudMind</h1><p>Turn your documents into answers you can trust.</p><label>Email<input placeholder="you@example.com" type="email" onChange={(event) => setEmail(event.target.value)} /></label><label>Password<input placeholder="8+ characters" type="password" onChange={(event) => setPassword(event.target.value)} /></label>{notice && <p className="notice error" role="alert">{notice}</p>}<button className="primary" onClick={() => authenticate('login')}>Log in</button><button className="link-button" onClick={() => authenticate('register')}>Create a free account</button></section></main>;
-
-  return <main><nav><a className="brand">☁ CloudMind</a><span className="nav-caption">Private document intelligence</span><button className="link-button" onClick={() => { localStorage.removeItem('token'); setToken(''); }}>Log out</button></nav><section className="hero"><span className="eyebrow">YOUR KNOWLEDGE, SEARCHABLE</span><h1>Ask your documents anything.</h1><p>Upload notes, research, and technical docs—then get grounded answers with the original sources attached.</p><label className="upload"><input type="file" accept=".txt,.pdf" onChange={upload} />Upload PDF or TXT <span>↗</span></label></section>{notice && <p className={`notice ${notice.includes('failed') || notice.includes('Could not') ? 'error' : ''}`} role="status">{notice}</p>}<section className="workspace"><aside className="card documents"><div className="section-heading"><div><span className="eyebrow">LIBRARY</span><h2>Documents</h2></div><b>{documents.length}</b></div>{documents.length ? documents.map((document) => <article key={document.id}><div><b>{document.filename}</b><span><i className={`status ${document.status}`} />{document.status} · {(document.size_bytes / 1024).toFixed(1)} KB</span></div><button aria-label={`Delete ${document.filename}`} className="icon-button" onClick={() => removeDocument(document.id)}>×</button></article>) : <div className="empty"><span>⌁</span><p>Upload your first document to begin.</p></div>}</aside><section className="card assistant"><span className="eyebrow">RESEARCH ASSISTANT</span><h2>Find the answer in your library.</h2><textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="What would you like to know?" /><button className="primary" onClick={ask}>Ask CloudMind <span>→</span></button>{answer && <div className="response"><span className="eyebrow">GROUNDED ANSWER</span><p>{answer}</p><h3>Sources</h3>{sources.map((source, index) => <article key={`${source.document_name}-${index}`}><div><b>{source.document_name}</b><span>Relevance {source.score}</span><p>{source.text}</p></div></article>)}</div>}</section></section></main>;
+  return <main className="app-shell"><nav className="reveal"><a className="brand"><span>☁</span> CloudMind</a><span className="nav-caption">Private document intelligence</span><span className="secure">● Secure workspace</span><button className="link-button" onClick={() => { localStorage.removeItem('token'); setToken(''); }}>Log out</button></nav><section className="hero reveal"><div><span className="eyebrow">YOUR KNOWLEDGE, IN MOTION</span><h1>Ask the questions<br /><em>your documents answer.</em></h1><p>Search your private library with a grounded AI assistant that always shows its work.</p><label className="upload"><input type="file" accept=".txt,.pdf" onChange={upload} /><span className="upload-icon">+</span> Upload a document <b>PDF or TXT</b></label></div><div className="hero-orb"><div className="orb-core">✦</div><div className="orb-ring ring-a" /><div className="orb-ring ring-b" /><span className="orb-label label-a">VECTOR SEARCH</span><span className="orb-label label-b">PRIVATE RAG</span></div></section><AnimatePresence>{notice && <motion.p className={`notice ${notice.includes('failed') || notice.includes('Could not') ? 'error' : ''}`} role="status" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>{notice}</motion.p>}</AnimatePresence><section className="workspace"><aside className="library card reveal"><div className="section-heading"><div><span className="eyebrow">LIBRARY</span><h2>Documents</h2></div><b>{documents.length}</b></div>{documents.length ? documents.map((document) => <motion.article key={document.id} layout initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -12 }}><div><b>{document.filename}</b><span><i className={`status ${document.status}`} />{document.status} · {(document.size_bytes / 1024).toFixed(1)} KB</span></div><button aria-label={`Delete ${document.filename}`} className="icon-button" onClick={() => removeDocument(document.id)}>×</button></motion.article>) : <div className="empty"><div className="empty-mark">⌁</div><h3>Your library is quiet.</h3><p>Upload a document and CloudMind will turn it into a searchable memory.</p></div>}<div className="library-foot"><span>01</span><div><i /><i /><i /></div><span>PRIVATE INDEX</span></div></aside><section className="assistant card reveal"><span className="eyebrow">RESEARCH ASSISTANT</span><h2>What are you looking for?</h2><div className="question-box"><textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask anything across your library…" /><button className="primary" disabled={isAsking} onClick={ask}>{isAsking ? 'Thinking…' : <>Ask CloudMind <span>→</span></>}</button></div><AnimatePresence mode="wait">{answer ? <motion.div className="response" key="answer" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}><div className="response-top"><span className="eyebrow">GROUNDED ANSWER</span><span className="verified">✦ cited</span></div><p>{answer}</p><h3>Evidence trail</h3>{sources.map((source, index) => <motion.article key={`${source.document_name}-${index}`} initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: index * .08 }}><div><b>{source.document_name}</b><span>Source {index + 1} · relevance {source.score}</span><p>{source.text}</p></div></motion.article>)}</motion.div> : <motion.div className="assistant-blank" key="blank" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><div className="sparkles">✦ · ✧ · ✦</div><p>Your answer will appear here with the source chunks that support it.</p></motion.div>}</AnimatePresence></section><SourceSignal sources={sources} /></section></main>;
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
