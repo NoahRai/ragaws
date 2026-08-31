@@ -9,15 +9,47 @@ from ..models import Document, DocumentChunk
 
 
 class EmbeddingService:
-    """A deterministic PyTorch hashing embedder suitable for a dependency-light MVP.
+    """Sentence-transformer embeddings with a deterministic offline fallback.
 
-    Its interface is compatible with replacing the implementation by a sentence transformer.
+    The default model is a compact semantic encoder. Set
+    ``CLOUDMIND_EMBEDDING_PROVIDER=hashing`` for offline development or tests.
     """
-    def __init__(self, dimensions: int = settings.embedding_dimensions):
-        self.dimensions = dimensions
+    def __init__(
+        self,
+        dimensions: int = settings.embedding_dimensions,
+        provider: str = settings.embedding_provider,
+        model_name: str = settings.embedding_model,
+    ):
+        self.provider = provider.lower()
+        if self.provider not in {"semantic", "hashing"}:
+            raise ValueError("embedding_provider must be 'semantic' or 'hashing'")
+        self.model_name = model_name
+        self.dimensions = dimensions if self.provider == "hashing" else settings.semantic_embedding_dimensions
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._model = None
+
+    def _semantic_model(self):
+        if self._model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as exc:  # pragma: no cover - deployment configuration guard
+                raise RuntimeError("Install sentence-transformers to use semantic embeddings") from exc
+            self._model = SentenceTransformer(self.model_name, device=self.device.type)
+            self.dimensions = self._model.get_sentence_embedding_dimension()
+        return self._model
 
     def embed_many(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        if self.provider == "semantic":
+            vectors = self._semantic_model().encode(
+                texts,
+                batch_size=32,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
+            return vectors.tolist()
         vectors = torch.zeros((len(texts), self.dimensions), device=self.device)
         with torch.inference_mode():
             for row, text in enumerate(texts):
@@ -57,8 +89,30 @@ class RetrievalService:
             terms.update(cls._QUERY_EXPANSIONS.get(term, set()))
         return terms
 
+    def _refresh_legacy_embeddings(self, db: Session, user_id: str, dimensions: int) -> None:
+        """Upgrade old hashing vectors in place after the semantic-model rollout."""
+        chunks = db.scalars(
+            select(DocumentChunk)
+            .join(Document)
+            .where(DocumentChunk.user_id == user_id, Document.status == "ready")
+        ).all()
+        stale = []
+        for chunk in chunks:
+            try:
+                stale_vector = json.loads(chunk.embedding_json)
+            except json.JSONDecodeError:
+                stale_vector = []
+            if len(stale_vector) != dimensions:
+                stale.append(chunk)
+        if not stale:
+            return
+        for chunk, vector in zip(stale, self.embeddings.embed_many([chunk.text for chunk in stale])):
+            chunk.embedding_json = json.dumps(vector)
+        db.commit()
+
     def search(self, db: Session, user_id: str, query: str, top_k: int):
         query_vector = torch.tensor(self.embeddings.embed(query))
+        self._refresh_legacy_embeddings(db, user_id, len(query_vector))
         query_terms = self.query_terms(query)
         rows = db.execute(select(DocumentChunk, Document.filename).join(Document).where(DocumentChunk.user_id == user_id, Document.status == "ready")).all()
         scored = []
@@ -66,8 +120,8 @@ class RetrievalService:
             vector_score = max(0.0, float(torch.dot(query_vector, torch.tensor(json.loads(chunk.embedding_json)))))
             chunk_terms = self._terms(chunk.text)
             lexical_score = len(query_terms & chunk_terms) / max(1, len(query_terms))
-            # The lexical channel preserves exact résumé entities; the vector channel adds recall.
-            score = 0.55 * vector_score + 0.45 * lexical_score
+            # Semantic similarity drives meaning; lexical matching preserves exact résumé entities.
+            score = 0.85 * vector_score + 0.15 * lexical_score
             scored.append((score, chunk, filename))
         return sorted(scored, key=lambda item: item[0], reverse=True)[:top_k]
 

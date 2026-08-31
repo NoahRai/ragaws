@@ -13,7 +13,7 @@ flowchart LR
   A --> D[(PostgreSQL + pgvector)]
   A --> S[S3 private documents]
   A --> Q[SQS processing queue]
-  Q --> W[Worker: parse, chunk, PyTorch embeddings]
+  Q --> W[Worker: parse, chunk, semantic embeddings]
   W --> D
   A --> L[LLM]
   A --> C[CloudWatch]
@@ -26,7 +26,7 @@ CloudMind presents a focused private-workspace experience: create an account, up
 ## Features
 
 - Authenticated, user-isolated document library with upload status and deletion
-- PDF/TXT parsing, chunking, batched PyTorch embeddings, and cosine retrieval
+- PDF/TXT parsing, chunking, normalized sentence-transformer embeddings, and cosine retrieval
 - Grounded RAG answers with document names, chunk excerpts, and relevance scores
 - Local-first workflow with S3/SQS worker adapters for AWS deployment
 - Request IDs, JSON logs, `/metrics`, health checks, CI, and container hardening
@@ -62,7 +62,7 @@ The benchmark uses 500 synthetic chunks and reports index construction plus P50/
 ## Data flow and security
 
 1. Authenticated user uploads a validated PDF/TXT document.
-2. A document record is created; it is parsed, chunked, embedded under `torch.inference_mode()`, and marked `ready` (synchronously for the local MVP).
+2. A document record is created; it is parsed, chunked, semantically embedded with `sentence-transformers/all-MiniLM-L6-v2`, and marked `ready` (synchronously for the local MVP). The first use downloads the model; set `CLOUDMIND_EMBEDDING_PROVIDER=hashing` for an offline fallback.
 3. Every list, retrieval, search, and delete query filters by the JWT subject, preventing cross-user access.
 4. Search embeds the question, scores only that user's ready chunks, and returns document/chunk citations.
 
@@ -72,7 +72,7 @@ Passwords are Argon2-hashed, SQLAlchemy binds query values, secrets live in envi
 
 - **Database:** migrate SQLite to PostgreSQL with Alembic; store embeddings in `vector`, add HNSW indexes, and use an ownership-scoped join for retrieval.
 - **Production engineering:** add Alembic migrations, CI image publishing/deployment, autoscaling alarms, and a durable metrics backend.
-- **RAG quality:** use a sentence-transformer, pgvector cosine search, a provider-backed LLM with a strict context-only prompt, and optional reranking/hybrid BM25.
+- **RAG quality:** migrate the semantic vectors to pgvector cosine search, add a provider-backed LLM with a strict context-only prompt, and optionally add reranking/hybrid BM25.
 
 ## Project layout
 

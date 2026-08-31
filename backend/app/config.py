@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     max_upload_bytes: int = 10 * 1024 * 1024
     embedding_dimensions: int = 256
+    embedding_provider: str = "semantic"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    semantic_embedding_dimensions: int = 384
     storage_backend: str = "local"
     s3_bucket: str | None = None
     aws_region: str = "us-east-1"
