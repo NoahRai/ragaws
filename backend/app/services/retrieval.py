@@ -176,7 +176,7 @@ class LLMService:
         institutions = []
         patterns = [
             r"\bUniversity of [A-Z][A-Za-z ,]+?(?=\s+(?:Expected|Bachelor|Master|Associate)|[•\n]|$)",
-            r"\b[A-Z][A-Za-z ]+ College\b",
+            r"\b(?:[A-Z][a-z]+\s+){0,2}College\b",
         ]
         for pattern in patterns:
             for match in re.finditer(pattern, context):
