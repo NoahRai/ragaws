@@ -2,7 +2,7 @@
 
 CloudMind is a private AI document intelligence platform: users upload TXT/PDF files, CloudMind processes them, retrieves relevant passages with vector similarity, and returns grounded answers with sources.
 
-> **Status:** Phases 1–6 complete: CloudMind includes deployment infrastructure plus request-correlated JSON logs, operational metrics, container health checks, and CI build verification. AWS infrastructure has not been applied from this repository.
+> **Status:** All seven planned phases are complete. CloudMind is a polished, locally verified portfolio project with an AWS-ready deployment design; AWS infrastructure has not been applied from this repository.
 
 ## Architecture
 
@@ -18,6 +18,18 @@ flowchart LR
   A --> L[LLM]
   A --> C[CloudWatch]
 ```
+
+## Demo
+
+CloudMind presents a focused private-workspace experience: create an account, upload PDF/TXT content, then ask questions and inspect cited source chunks. The full [demo script](docs/DEMO.md) is ready for a portfolio recording or technical interview.
+
+## Features
+
+- Authenticated, user-isolated document library with upload status and deletion
+- PDF/TXT parsing, chunking, batched PyTorch embeddings, and cosine retrieval
+- Grounded RAG answers with document names, chunk excerpts, and relevance scores
+- Local-first workflow with S3/SQS worker adapters for AWS deployment
+- Request IDs, JSON logs, `/metrics`, health checks, CI, and container hardening
 
 The local implementation uses SQLite and local in-memory storage. Set `CLOUDMIND_STORAGE_BACKEND=s3` and `CLOUDMIND_S3_BUCKET` to use `S3StorageService`; it stores private, encrypted objects as `documents/{user_id}/{document_id}/original.{extension}` and creates short-lived presigned download URLs only after ownership validation. Set `CLOUDMIND_QUEUE_BACKEND=sqs` and `CLOUDMIND_SQS_QUEUE_URL` to dispatch an idempotent `processing_jobs` record to `backend/worker.py`. `DocumentProcessor`, `StorageService`, `EmbeddingService`, `RetrievalService`, and `LLMService` isolate provider-specific work.
 
@@ -40,7 +52,10 @@ Or run `docker compose up --build`.
 
 ```bash
 PYTHONPATH=backend pytest backend/tests
+PYTHONPATH=backend python backend/benchmarks/benchmark_retrieval.py
 ```
+
+The benchmark uses 500 synthetic chunks and reports index construction plus P50/P95 query latency on the active CPU/CUDA device. It is intended as a repeatable local baseline, not a cloud performance claim.
 
 ## Data flow and security
 
@@ -54,7 +69,7 @@ Passwords are Argon2-hashed, SQLAlchemy binds query values, secrets live in envi
 ## Production roadmap
 
 - **Database:** migrate SQLite to PostgreSQL with Alembic; store embeddings in `vector`, add HNSW indexes, and use an ownership-scoped join for retrieval.
-- **Production engineering:** add migrations, CI image publishing/deployment, structured correlation IDs, latency metrics, and alarms.
+- **Production engineering:** add Alembic migrations, CI image publishing/deployment, autoscaling alarms, and a durable metrics backend.
 - **RAG quality:** use a sentence-transformer, pgvector cosine search, a provider-backed LLM with a strict context-only prompt, and optional reranking/hybrid BM25.
 
 ## Project layout
@@ -63,6 +78,8 @@ Passwords are Argon2-hashed, SQLAlchemy binds query values, secrets live in envi
 frontend/       React + TypeScript Vite interface
 backend/app/    FastAPI, models, services, authentication
 backend/tests/  API workflow test
+backend/benchmarks/  Reproducible retrieval latency baseline
+docs/           Portfolio demo and interview walkthrough
 infrastructure/ Terraform cloud starter
 .github/        CI pipeline
 ```
