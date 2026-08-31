@@ -45,9 +45,54 @@ class RetrievalService:
 
 
 class LLMService:
-    """Safe local fallback. Production implementation calls a configured LLM provider."""
+    """Grounded local answer extractor. Production can replace this with an LLM provider."""
+    _STOP_WORDS = {"a", "an", "at", "did", "do", "does", "for", "he", "her", "his", "i", "in", "is", "of", "she", "the", "they", "to", "was", "what", "where", "who", "with", "you", "your"}
+    _MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+
+    @classmethod
+    def _terms(cls, text: str) -> set[str]:
+        terms = set()
+        for token in re.findall(r"[a-zA-Z]{3,}", text.lower()):
+            if token in cls._STOP_WORDS:
+                continue
+            terms.add(token)
+            if token.endswith("ed"):
+                terms.add(token[:-2])
+            if token.endswith("ing"):
+                terms.add(token[:-3])
+        return terms
+
+    @staticmethod
+    def _statements(sources: list[dict]) -> list[str]:
+        statements = []
+        for source in sources:
+            # Résumés and technical notes commonly use bullets; preserve each bullet as evidence.
+            statements.extend(piece.strip(" .") for piece in re.split(r"[•\n]+", source["text"]) if piece.strip())
+        return statements
+
+    def _internship_answer(self, statement: str) -> str | None:
+        date_range = rf"{self._MONTH}\.?\s+\d{{4}}\s*(?:–|-|to)\s*{self._MONTH}\.?\s+\d{{4}}\s+"
+        match = re.search(date_range + r"(?P<company>[^|.]+?)(?:\s*\|\s*(?P<location>[^.]+))?$", statement, re.IGNORECASE)
+        if not match:
+            return None
+        company = match.group("company").strip()
+        location = (match.group("location") or "").strip()
+        if not company:
+            return None
+        location_text = f" ({location})" if location else ""
+        return f"They interned at {company}{location_text}."
+
     def answer(self, question: str, sources: list[dict]) -> str:
         if not sources or sources[0]["score"] <= 0:
             return "I couldn't find enough information in your uploaded documents to answer that."
-        context = " ".join(source["text"] for source in sources[:2])
-        return f"Based on your documents: {context[:900]}"
+        query_terms = self._terms(question)
+        candidates = self._statements(sources)
+        ranked = sorted(candidates, key=lambda statement: len(query_terms & self._terms(statement)), reverse=True)
+        if not ranked or not (query_terms & self._terms(ranked[0])):
+            return "I couldn't find enough information in your uploaded documents to answer that."
+        best = ranked[0]
+        if "intern" in query_terms and any(term in question.lower() for term in ("where", "company", "intern")):
+            internship = self._internship_answer(best)
+            if internship:
+                return internship
+        return f"According to your documents: {best}."
