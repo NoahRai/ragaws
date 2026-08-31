@@ -1,1 +1,9 @@
-{"scripts":{"dev":"vite","build":"tsc -b && vite build"},"dependencies":{"animejs":"^4.5.0","motion":"^13.1.1","react":"latest","react-dom":"latest","typescript":"latest","vite":"latest"},"devDependencies":{"@types/react":"latest","@types/react-dom":"latest"}}
+{
+  "type": "module",
+  "scripts": { "dev": "vite", "build": "tsc -b && vite build" },
+  "dependencies": {
+    "@number-flow/react": "^0.6.2", "@visx/curve": "^4.0.1-alpha.0", "@visx/event": "^4.0.1-alpha.0", "@visx/gradient": "^4.0.1-alpha.0", "@visx/grid": "^4.0.1-alpha.0", "@visx/responsive": "^4.0.1-alpha.0", "@visx/scale": "^4.0.1-alpha.0", "@visx/shape": "^4.0.1-alpha.0",
+    "animejs": "^4.5.0", "clsx": "^2.1.1", "d3-array": "^3.2.4", "d3-shape": "^3.2.0", "lucide-react": "^1.37.0", "motion": "^13.1.1", "react": "latest", "react-dom": "latest", "tailwind-merge": "^3.6.0", "typescript": "latest", "vite": "latest"
+  },
+  "devDependencies": { "@tailwindcss/vite": "^4.3.3", "@types/node": "^26.4.0", "@types/react": "latest", "@types/react-dom": "latest", "tailwindcss": "^4.3.3" }
+}

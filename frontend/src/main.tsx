@@ -2,6 +2,7 @@ import { ChangeEvent, useEffect, useState } from 'react';
 import { animate, stagger } from 'animejs';
 import { AnimatePresence, motion } from 'motion/react';
 import { createRoot } from 'react-dom/client';
+import { Area, AreaChart } from '@/components/charts/area-chart';
 import './style.css';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -10,7 +11,8 @@ type Source = { document_name: string; text: string; score: number };
 
 function SourceSignal({ sources }: { sources: Source[] }) {
   const values = sources.length ? sources.slice(0, 5).map((source) => Math.max(10, Math.round(source.score * 100))) : [42, 62, 38, 78, 54];
-  return <div className="signal-card reveal"><div className="signal-header"><div><span className="eyebrow">RETRIEVAL SIGNAL</span><h3>Source confidence</h3></div><span className="live-dot">LIVE</span></div><div className="signal-bars" aria-label="Retrieved source relevance visualization">{values.map((value, index) => <motion.div key={`${value}-${index}`} className="signal-column" initial={{ scaleY: 0 }} animate={{ scaleY: 1 }} transition={{ delay: index * .08, type: 'spring', stiffness: 130, damping: 16 }}><div className="signal-bar" style={{ height: `${value}%` }} /><span>{index + 1}</span></motion.div>)}</div><p>Each pulse is a ranked source chunk returned by semantic search.</p></div>;
+  const chartData = values.map((confidence, index) => ({ date: new Date(2026, 7, index + 1), confidence }));
+  return <div className="signal-card reveal"><div className="signal-header"><div><span className="eyebrow">RETRIEVAL SIGNAL</span><h3>Source confidence</h3></div><span className="live-dot">LIVE</span></div><div className="signal-chart" aria-label="Bklit source confidence area chart"><AreaChart data={chartData} animationDuration={900} aspectRatio="1.45 / 1" margin={{ top: 10, right: 4, bottom: 12, left: 4 }}><Area dataKey="confidence" fill="#a49bff" stroke="#c6c1ff" strokeWidth={2.5} gradientToOpacity={0.03} showMarkers /></AreaChart></div><p>Animated with Bklit UI: each point is a ranked source chunk.</p></div>;
 }
 
 function App() {

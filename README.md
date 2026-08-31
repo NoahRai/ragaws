@@ -31,6 +31,7 @@ CloudMind presents a focused private-workspace experience: create an account, up
 - Local-first workflow with S3/SQS worker adapters for AWS deployment
 - Request IDs, JSON logs, `/metrics`, health checks, CI, and container hardening
 - Anime.js staggered reveals plus Motion-powered layout and response transitions
+- Bklit UI `@bklit/area-chart` retrieval-confidence visualization
 
 The local implementation uses SQLite and local in-memory storage. Set `CLOUDMIND_STORAGE_BACKEND=s3` and `CLOUDMIND_S3_BUCKET` to use `S3StorageService`; it stores private, encrypted objects as `documents/{user_id}/{document_id}/original.{extension}` and creates short-lived presigned download URLs only after ownership validation. Set `CLOUDMIND_QUEUE_BACKEND=sqs` and `CLOUDMIND_SQS_QUEUE_URL` to dispatch an idempotent `processing_jobs` record to `backend/worker.py`. `DocumentProcessor`, `StorageService`, `EmbeddingService`, `RetrievalService`, and `LLMService` isolate provider-specific work.
 
